@@ -4,6 +4,7 @@ import (
     "github.com/mrmorphic/hwio"
     "fmt"
     "time"
+    "os"
 )
 
 const (
@@ -24,7 +25,9 @@ var (
 
     t0 = time.Now()   // initial time of the loop
     c chan int //channel initialitation
-    ledAction hwio.Pin // indicating action in the system
+    actionLed hwio.Pin // indicating action in the system
+    outputFile *os.File   // data output file
+
 )
 
 
@@ -37,6 +40,8 @@ func readTracker(name string, trackerPin hwio.Pin){
     timeAction := time.Now() // time of the action detected
     timeActionOld := time.Now() // time of the action-1 detected
 
+    //fmt.Printf("[%s] File: %s\n",name,outputFile)
+
     // loop
     for {
            // Read the tracker value
@@ -48,15 +53,19 @@ func readTracker(name string, trackerPin hwio.Pin){
         timeAction= time.Now() // time at this point
         // Did value change?
         if value != oldValue {
-            fmt.Printf("[%s] %v (%v) -> %d\n",
+            dataString := fmt.Sprintf("[%s] %v (%v) -> %d\n",
                        name,timeAction.Sub(t0),timeAction.Sub(timeActionOld),value)
+            //fmt.Printf("[%s] %v (%v) -> %d\n",
+            //           name,timeAction.Sub(t0),timeAction.Sub(timeActionOld),value)
+            fmt.Printf(dataString)
+            outputFile.WriteString(dataString)
             oldValue = value
 
             // Write the value to the led indicating somewhat is happened
             if (value == 1) {
-                hwio.DigitalWrite(ledAction, hwio.HIGH)
+                hwio.DigitalWrite(actionLed, hwio.HIGH)
             } else {
-                hwio.DigitalWrite(ledAction, hwio.LOW)
+                hwio.DigitalWrite(actionLed, hwio.LOW)
             }
         }
     }
@@ -82,6 +91,23 @@ func main() {
 
     // setup 
 
+    // open file (create if not exists!)
+    if len(os.Args) != 2 { 
+
+       fmt.Printf("Usage: %s fileBaseName\n", os.Args[0])
+       os.Exit(1)
+    }
+
+    t := time.Now()
+    thisOutputFileName := fmt.Sprintf("%s_%d%02d%02d%02d%02d%02d.csv", os.Args[1],t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
+    thisOutputFile, e := os.Create(thisOutputFileName)
+    if e != nil {
+        panic(e)
+    }
+    fmt.Printf("File: %s\n",thisOutputFileName)
+
+    outputFile = thisOutputFile 
+    
     // Set up 'trakers' as inputs
     trackerA, e := hwio.GetPinWithMode(trackerAPin, hwio.INPUT)
     if e != nil {
@@ -115,11 +141,11 @@ func main() {
     if e != nil {
         panic(e)
     }
-    actionLed, e := hwio.GetPinWithMode(actionLedPin, hwio.OUTPUT)
+    thisActionLed, e := hwio.GetPinWithMode(actionLedPin, hwio.OUTPUT)
     if e != nil {
         panic(e)
     }
-    ledAction=actionLed // to be global accessed by the trackers
+    actionLed = thisActionLed
 
     fmt.Printf("Push button A to start, B to finish...\n");
 
@@ -148,5 +174,8 @@ func main() {
 
    // close the GPIO pins
     defer hwio.CloseAll()
+
+    defer thisOutputFile.Close() //close the file when main finished
+
 
 } 
