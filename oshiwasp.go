@@ -6,7 +6,6 @@ import (
     "time"
     "os"
     "net/http"
-    "io/ioutil"
     "regexp"
     "errors"
     "html/template"
@@ -14,36 +13,25 @@ import (
 
 type Page struct {
     Title string
-    Body []byte
+    Body string
 }
 
+const tmplPath = "tmpl/" // path of the template files .html in the local file system
+const dataPath = "data/" // path of the data files in the local file system
+const dataFileName = "output.csv" //  data file name in the local file system
 
-var templates = template.Must(template.ParseFiles("index.html", "start.html", "stop.html", "download.html"))
-var validPath = regexp.MustCompile("^/(index|start|stop|download)/([a-zA-Z0-9]+)$")
+var templates = template.Must(template.ParseGlob(tmplPath+"*.html"))
+var validPath = regexp.MustCompile("^/(index|new|start|pause|resume|stop|download|data)/([a-zA-Z0-9]+)$")
 
-func (p *Page) save() error {
-    filename := p.Title + ".txt"
-    return ioutil.WriteFile(filename,p.Body, 0600)
-}
-
-func loadPage(title string) (*Page, error) {
-    filename := title + ".html"
-    body, err := ioutil.ReadFile(filename)
-    if err != nil {
-       return nil, err
-    }
-    return &Page{Title: title, Body: body}, nil
-}
-
-func renderTemplate(w http.ResponseWriter, tmpl string) {
-    err := templates.ExecuteTemplate(w, tmpl+".html", nil)
+func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
+    err := templates.ExecuteTemplate(w, tmpl+".html", p)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
 }
 
-func getName(w http.ResponseWriter, r *http.Request) (string, error) {
+func getTitle(w http.ResponseWriter, r *http.Request) (string, error) {
     m := validPath.FindStringSubmatch(r.URL.Path)
     if m == nil {
         http.NotFound(w, r)
@@ -53,17 +41,37 @@ func getName(w http.ResponseWriter, r *http.Request) (string, error) {
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
-    renderTemplate(w,"index")
+    theAcq.state = stateNEW
+    p := &Page{Title: "Index", Body: "Make an action. State:  "+theAcq.state}
+    renderTemplate(w,"index",p)
+}
+
+func newHandler(w http.ResponseWriter, r *http.Request) {
+
+    theAcq.state = stateNEW
+    // create a new output file
+    var e error
+    theAcq.outputFile, e = os.Create(theAcq.outputFileName)
+    if e != nil {
+        panic(e)
+    }
+
+    p := &Page{Title: "Index", Body: "New acquisition ready. Select Start to begin it. State: " + theAcq.state}
+
+    renderTemplate(w,"index",p)
 }
 
 func startHandler(w http.ResponseWriter, r *http.Request) {
-    // read the button A change to init the data readdings
+
+    theAcq.state = stateRUNNING
+
     //waitTillButtonPushed(buttonA)
+    p := &Page{Title: "Start", Body: "State: "+theAcq.state}
     hwio.DigitalWrite(theOshi.statusLed, hwio.HIGH)
     t0 = time.Now()
     fmt.Printf("Beginning.....\n");
 
-    renderTemplate(w,"start")
+    renderTemplate(w,"start",p)
 
     // launch the trackers
 
@@ -71,32 +79,25 @@ func startHandler(w http.ResponseWriter, r *http.Request) {
     go readTracker("B", theOshi.trackerB)
     go readTracker("C", theOshi.trackerC)
     go readTracker("D", theOshi.trackerD)
-
 }
 
 func stopHandler(w http.ResponseWriter, r *http.Request) {
 
-    renderTemplate(w,"stop")
-
+    theAcq.state = stateSTOPPED
     hwio.DigitalWrite(theOshi.statusLed, hwio.LOW)
     fmt.Printf("Finnishing.....\n");
-
-    //fmt.Print("Enter to finish: ")
-    //var input string
-    //fmt.Scanln(&input)
-   
-
     // close the GPIO pins
     //hwio.CloseAll()
-
     theAcq.outputFile.Close() //close the file when finished
     fmt.Print("Finished...")
+    p := &Page{Title: "Stop", Body:"State: "+theAcq.state}
+    renderTemplate(w,"stop",p)
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
-    renderTemplate(w,"download")
+    p := &Page{Title: "Index", Body: "Download"}
+    renderTemplate(w,"download",p)
 }
-
 
 const (
     // setup of the pinout in the raspberry
@@ -113,23 +114,40 @@ const (
     trackerDPin = "gpio4"    
 )
 
+
+const (
+    //States for the acquisition
+    //                  resume <- PAUSED <- pause
+    //                     |                 ^
+    //                     |                 |
+    //                     +----+        +---+
+    //                           \      /
+    //0 -- new -> NEW -- start -> RUNNING -- stop -> STOPPED
+    //             ^                                   |
+    //             |                                   |
+    //             +--------------- new ---------------+
+    //
+    stateNEW = "NEW"
+    stateRUNNING = "RUNNING"
+    statePAUSED = "PAUSED"
+    stateSTOPPED = "STOPPED"
+    stateERROR = "ERROR"
+)
+
 type Acquisition struct{
-    name string
-    t0 time.Time
+    outputFileName string
     outputFile *os.File
+    state string
 }
 
-func (acq *Acquisition) Init(name string){
-    acq.name=name
-    t := time.Now()
-    thisOutputFileName := fmt.Sprintf("%s_%d%02d%02d%02d%02d%02d.csv", acq.name,t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
+func (acq *Acquisition) Init(){
+    acq.state = stateNEW
+    acq.outputFileName = dataPath+dataFileName
     var e error
-    acq.outputFile, e = os.Create(thisOutputFileName)
+    acq.outputFile, e = os.Create(acq.outputFileName)
     if e != nil {
         panic(e)
     }
-    //debug
-    //fmt.Println("%v", acq)
 }
 
 
@@ -256,21 +274,16 @@ func main() {
     // setup 
     mux := http.NewServeMux()
     mux.HandleFunc("/", indexHandler)
-    mux.HandleFunc("/index", indexHandler)
-    mux.HandleFunc("/start", startHandler)
-    mux.HandleFunc("/stop", stopHandler)
-    mux.HandleFunc("/download", downloadHandler)
+    mux.HandleFunc("/index/", indexHandler)
+    mux.HandleFunc("/start/", startHandler)
+    mux.HandleFunc("/stop/", stopHandler)
+    mux.HandleFunc("/download/", downloadHandler)
 
-    // open file (create if not exists!)
-    if len(os.Args) != 2 { 
-       fmt.Printf("Usage: %s fileBaseName\n", os.Args[0])
-       os.Exit(1)
-    }
-
-    theAcq.Init(os.Args[1]);
+    theAcq.Init();
     theOshi.Init();
 
     // starting the web service...
+   // http.Handle("/data", http.FileServer(http.Dir("./data")))
     http.ListenAndServe(":8080", mux)
 
     // close the GPIO pins
