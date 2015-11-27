@@ -140,7 +140,7 @@ type Acquisition struct{
     state string
 }
 
-func (acq *Acquisition) Init(){
+func (acq *Acquisition) initiate(){
     acq.state = stateNEW
     acq.outputFileName = dataPath+dataFileName
     var e error
@@ -162,7 +162,7 @@ type Oshiwasp struct {
     trackerD hwio.Pin
 }
 
-func (oshi *Oshiwasp) Init(){
+func (oshi *Oshiwasp) initiate(){
 
     var e error
     // Set up 'trakers' as inputs
@@ -273,14 +273,15 @@ func main() {
 
     // setup 
     mux := http.NewServeMux()
-    mux.HandleFunc("/", indexHandler)
+    mux.Handle("/",http.FileServer(http.Dir("data")))
+    //mux.HandleFunc("/", indexHandler)
     mux.HandleFunc("/index/", indexHandler)
     mux.HandleFunc("/start/", startHandler)
     mux.HandleFunc("/stop/", stopHandler)
-    mux.HandleFunc("/download/", downloadHandler)
+    //mux.HandleFunc("/download/",http.FileServer(http.Dir("./data")))
 
-    theAcq.Init();
-    theOshi.Init();
+    theAcq.initiate();
+    theOshi.initiate();
 
     // starting the web service...
    // http.Handle("/data", http.FileServer(http.Dir("./data")))
