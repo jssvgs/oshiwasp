@@ -23,11 +23,21 @@ type Acquisition struct{
     outputFileName string
     outputFile *os.File
     state string
+    time0 time.Time
+}
+
+func (acq *Acquisition) setTime0(){
+    acq.time0 = time.Now()
+}
+
+func (acq *Acquisition) getTime0() time.Time {
+    return acq.time0 
 }
 
 func (acq *Acquisition) getState() string{
     return acq.state
 }
+
 func (acq *Acquisition) setState(s string){
     acq.state = s
     log.Printf("State set to %s\n", acq.state)
@@ -44,6 +54,9 @@ func (acq *Acquisition) createOutputFile(){
     if e != nil {
         panic(e)
     }
+    statusLine := fmt.Sprintf("### %v Data Acquisition\n\n", time.Now())
+    acq.outputFile.WriteString(statusLine)
+    
     log.Printf("Cretated output File %s", acq.outputFileName)
 }
 
@@ -87,7 +100,6 @@ const (
     dataPath = "data/" // path of the data files in the local file system
     dataFileName = "output.csv" //  data file name in the local file system
 
-
     // setup of the pinout in the raspberry
 
     statusLedPin = "gpio7" // green      
@@ -108,8 +120,8 @@ const (
     //                     +----+        +---+
     //                           \      /
     //0 -- new -> NEW -- start -> RUNNING -- stop -> STOPPED
-    //             ^                                   |
-    //             |                                   |
+    //             ^       ^                           |
+    //             |       +------- start -------------+
     //             +--------------- new ---------------+
     //
     stateNEW = "NEW"
@@ -122,9 +134,8 @@ const (
 
 var (
 
-    t0 = time.Now()   // initial time of the loop
     c chan int //channel initialitation
-    actionLed hwio.Pin // indicating action in the system
+    //actionLed hwio.Pin // indicating action in the system
 
     templates = template.Must(template.ParseGlob(tmplPath+"*.html"))
     validPath = regexp.MustCompile("^/(index|new|start|pause|resume|stop|download|data)/([a-zA-Z0-9]+)$")
@@ -192,7 +203,6 @@ func (oshi *Oshiwasp) initiate(){
 }
 
 
-
 func readTracker(name string, trackerPin hwio.Pin){
 
     //value readed from tracker, initially set to 0, because the tracker was innactive
@@ -212,9 +222,7 @@ func readTracker(name string, trackerPin hwio.Pin){
         // Did value change?
         if value != oldValue {
             dataString := fmt.Sprintf("[%s] %v (%v) -> %d\n",
-                       name,timeAction.Sub(t0),timeAction.Sub(timeActionOld),value)
-            //fmt.Printf("[%s] %v (%v) -> %d\n",
-            //           name,timeAction.Sub(t0),timeAction.Sub(timeActionOld),value)
+                       name,timeAction.Sub(theAcq.getTime0()),timeAction.Sub(timeActionOld),value)
 	    if  theAcq.getState() != statePAUSED {
                 log.Println(dataString)
                 theAcq.outputFile.WriteString(dataString)
@@ -222,12 +230,10 @@ func readTracker(name string, trackerPin hwio.Pin){
             oldValue = value
 
             // Write the value to the led indicating somewhat is happened
-	    if  theAcq.getState() != statePAUSED {
-                if (value == 1) {
-                    hwio.DigitalWrite(actionLed, hwio.HIGH)
-                } else {
-                    hwio.DigitalWrite(actionLed, hwio.LOW)
-                }
+            if (value == 1) {
+                hwio.DigitalWrite(theOshi.actionLed, hwio.HIGH)
+            } else {
+                hwio.DigitalWrite(theOshi.actionLed, hwio.LOW)
             }
         }
     }
@@ -297,17 +303,21 @@ func newHandler(w http.ResponseWriter, r *http.Request) {
 func startHandler(w http.ResponseWriter, r *http.Request) {
 
     // manage file depending the previous state 
-    if theAcq.getState()== stateSTOPPED {
+    if theAcq.getState() == stateSTOPPED {
         theAcq.reopenOutputFile() 
         log.Printf("Reopen file %s\n", theAcq.outputFile);
     }
-    theAcq.setState(stateRUNNING)
 
+    // sets the new time0 only with a new scenery
+    if theAcq.getState() == stateNEW {
+        theAcq.setTime0();
+    }
+
+    theAcq.setState(stateRUNNING)
 
     //waitTillButtonPushed(buttonA)
     p := &Page{Title: "Start", Body: "State: "+theAcq.state}
     hwio.DigitalWrite(theOshi.statusLed, hwio.HIGH)
-    t0 = time.Now()
     log.Println("Beginning.....");
 
     renderTemplate(w,"start",p)
