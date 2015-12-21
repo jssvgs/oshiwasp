@@ -239,6 +239,17 @@ func readTracker(name string, trackerPin hwio.Pin){
     }
 }
 
+func blinkingLed(ledPin hwio.Pin) int {
+    // loop
+    for {
+        hwio.DigitalWrite(ledPin, hwio.HIGH)
+        hwio.Delay(500)
+	hwio.DigitalWrite(ledPin, hwio.LOW)
+	hwio.Delay(500)
+    }
+}
+
+
 func waitTillButtonPushed(buttonPin hwio.Pin) int {
 
     // loop
@@ -368,7 +379,7 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
     theAcq.closeOutputFile() //close the file when finished
     p := &Page{Title: "Stop", Body:"State: "+theAcq.state}
     renderTemplate(w,"stop",p)
-    log.Printf("There are %v goroutines", runtime.NumGoroutine())
+    //log.Printf("There are %v goroutines", runtime.NumGoroutine())
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
