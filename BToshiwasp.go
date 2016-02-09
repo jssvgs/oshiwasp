@@ -67,6 +67,10 @@ var (
 
     templates = template.Must(template.ParseGlob(tmplPath+"*.html"))
     validPath = regexp.MustCompile("^/(index|new|start|pause|resume|stop|download|data)/([a-zA-Z0-9]+)$")
+
+    theSensorData SensorData
+    theSensorDataInBytes SensorDataInBytes
+
     theAcq=new(Acquisition)
     theOshi=new(Oshiwasp)
 
@@ -79,8 +83,8 @@ var (
 
 // data for sensors in Arduino
 type SensorData struct{
-        sincro byte
-        microSeconds uint32
+        sincroMicroSeconds uint32
+        sensorMicroSeconds uint32
         distance uint32
         accX float32
         accY float32
@@ -88,6 +92,17 @@ type SensorData struct{
         gyrX float32
         gyrY float32
         gyrZ float32
+}
+type SensorDataInBytes struct{
+    	sincroMicroSecondsInBytes []byte
+	sensorMicroSecondsInBytes []byte
+	distanceInBytes []byte
+	accXInBytes []byte
+	accYInBytes []byte
+	accZInBytes []byte
+	gyrXInBytes []byte
+	gyrYInBytes []byte
+	gyrZInBytes []byte
 }
 
 type Acquisition struct{
@@ -191,6 +206,8 @@ func (acq *Acquisition) createOutputFile(){
     }
     statusLine := fmt.Sprintf("### %v Data Acquisition\n\n", time.Now())
     acq.outputFile.WriteString(statusLine)
+    formatLine := fmt.Sprintf("### [Ard], localTime(us), sincroTime(us), sensorTime(us), distance(mm), accX(g), accY(g), accZ(g), gyrX(º/s), gyrY(º/s), gyrZ(º/s) \n\n")
+    acq.outputFile.WriteString(formatLine)
     
     log.Printf("Cretated output File %s", acq.outputFileName)
 }
@@ -295,11 +312,9 @@ func (oshi *Oshiwasp) initiate(){
 
 func readTracker(name string, trackerPin hwio.Pin){
 
-    //value readed from tracker, initially set to 0, because the tracker was innactive
-    oldValue := 0
-
+    oldValue := 0 //value readed from tracker, initially set to 0, because the tracker was innactive
     timeAction := time.Now() // time of the action detected
-    timeActionOld := time.Now() // time of the action-1 detected
+
     // loop
     for theAcq.getState() != stateSTOPPED {
            // Read the tracker value
@@ -307,17 +322,16 @@ func readTracker(name string, trackerPin hwio.Pin){
            if e != nil {
                 panic(e)
            }
-        timeActionOld=timeAction //store the last time
+        //timeActionOld=timeAction //store the last time
         timeAction= time.Now() // time at this point
         // Did value change?
-        if value != oldValue {
-            dataString := fmt.Sprintf("[%s] %v (%v) -> %d\n",
-                       name,timeAction.Sub(theAcq.getTime0()),timeAction.Sub(timeActionOld),value)
+        if (value == 1) && (value != oldValue) {
 	    if  theAcq.getState() != statePAUSED {
+                dataString := fmt.Sprintf("[%s], %d,\n",
+                              name,int64(timeAction.Sub(theAcq.getTime0())/time.Microsecond))
                 log.Println(dataString)
                 theAcq.outputFile.WriteString(dataString)
             }
-            oldValue = value
 
             // Write the value to the led indicating somewhat is happened
             if (value == 1) {
@@ -326,21 +340,14 @@ func readTracker(name string, trackerPin hwio.Pin){
                 hwio.DigitalWrite(theOshi.actionLed, hwio.LOW)
             }
         }
+        oldValue = value
     }
 }
 
 func (acq *Acquisition) readFromArduino(){
 
     var register, reg []byte
-    var sensorData SensorData
-    var microSecondsInBytes []byte
-    var distanceInBytes []byte
-    var accXInBytes []byte
-    var accYInBytes []byte
-    var accZInBytes []byte
-    var gyrXInBytes []byte
-    var gyrYInBytes []byte
-    var gyrZInBytes []byte
+    // operate with the gobal variables theSensorData and theSensorDataInBytes; more speed?
 
     // don't use the first readding ??  I'm not sure about that
     reader := bufio.NewReader(acq.serialPort)
@@ -358,71 +365,179 @@ func (acq *Acquisition) readFromArduino(){
         reg = nil
 
         //n, err = s.Read(register)
-        for len(register) < 34 { // in case of \x24 chars repeted
+        for len(register) < 38 { // in case of \x24 chars repeted the length will be less than the expected 38 bytes
             reg, err = reader.ReadBytes('\x24');
             if err != nil { log.Fatal(err) }
             register = append(register, reg...)
         }
 
-        timeAction := time.Now() // time of the action detected
+        receptionTime := time.Now() // time of the action detected
 
-        if (register[0] == '\x23' || register[0] == '\x64') {
+        if (register[0] == '\x23') { // if first byte is '#', lets decode the stream of bytes in register
 
             //decode the register
 
-            if register[0] == '\x64' {
-                sensorData.sincro=1   //sincro signal
-             } else {
-                sensorData.sincro=0
-             }
-             microSecondsInBytes = register[1:5]
-             buf := bytes.NewReader(microSecondsInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.microSeconds)
+             theSensorDataInBytes.sincroMicroSecondsInBytes = register[1:5]
+             buf := bytes.NewReader(theSensorDataInBytes.sincroMicroSecondsInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.sincroMicroSeconds)
 
-             distanceInBytes = register[5:9]
-             buf = bytes.NewReader(distanceInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.distance)
+             theSensorDataInBytes.sensorMicroSecondsInBytes = register[5:9]
+             buf = bytes.NewReader(theSensorDataInBytes.sensorMicroSecondsInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.sensorMicroSeconds)
 
-             accXInBytes = register[9:13]
-             buf = bytes.NewReader(accXInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.accX)
+             theSensorDataInBytes.distanceInBytes = register[9:13]
+             buf = bytes.NewReader(theSensorDataInBytes.distanceInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.distance)
 
-             accYInBytes = register[13:17]
-             buf = bytes.NewReader(accYInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.accY)
+             theSensorDataInBytes.accXInBytes = register[13:17]
+             buf = bytes.NewReader(theSensorDataInBytes.accXInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.accX)
 
-             accZInBytes = register[17:21]
-             buf = bytes.NewReader(accZInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.accZ)
+             theSensorDataInBytes.accYInBytes = register[17:21]
+             buf = bytes.NewReader(theSensorDataInBytes.accYInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.accY)
 
-             gyrXInBytes = register[21:25]
-             buf = bytes.NewReader(gyrXInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.gyrX)
+             theSensorDataInBytes.accZInBytes = register[21:25]
+             buf = bytes.NewReader(theSensorDataInBytes.accZInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.accZ)
 
-             gyrYInBytes = register[25:29]
-             buf = bytes.NewReader(gyrYInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.gyrY)
+             theSensorDataInBytes.gyrXInBytes = register[25:29]
+             buf = bytes.NewReader(theSensorDataInBytes.gyrXInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.gyrX)
 
-             gyrZInBytes = register[29:33]
-             buf = bytes.NewReader(gyrZInBytes)
-             err = binary.Read(buf, binary.LittleEndian, &sensorData.gyrZ)
+             theSensorDataInBytes.gyrYInBytes = register[29:33]
+             buf = bytes.NewReader(theSensorDataInBytes.gyrYInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.gyrY)
+
+             theSensorDataInBytes.gyrZInBytes = register[33:37]
+             buf = bytes.NewReader(theSensorDataInBytes.gyrZInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &theSensorData.gyrZ)
 
         } // if
 
 
 
-
-	//compound the dataline and write to the output
-        //timeAction= time.Now() // Alternative: time at this point 
-        dataString := fmt.Sprintf("[%s], %v, %v, %v, %v, %v, %v, %v, %v, %v, %v\n",
-                       "Ard", timeAction.Sub(theAcq.getTime0()),
-                       sensorData.sincro, sensorData.microSeconds, sensorData.distance, 
-                       sensorData.accX, sensorData.accY, sensorData.accZ,
-                       sensorData.gyrX, sensorData.gyrY, sensorData.gyrZ)
-
+  
 	if  acq.getState() != statePAUSED {
-             log.Println(dataString)
-             acq.outputFile.WriteString(dataString)
+	    //compound the dataline and write to the output
+            //receptionTime= time.Now() // Alternative: time at this point 
+            dataString := fmt.Sprintf("[%s], %d, %d, %d, %d, %f, %f, %f, %f, %f, %f\n",
+                       "Ard", int64(receptionTime.Sub(theAcq.getTime0())/time.Microsecond),
+                       theSensorData.sincroMicroSeconds, theSensorData.sensorMicroSeconds, theSensorData.distance, 
+                       theSensorData.accX, theSensorData.accY, theSensorData.accZ,
+                       theSensorData.gyrX, theSensorData.gyrY, theSensorData.gyrZ)
+
+            log.Println(dataString)
+            acq.outputFile.WriteString(dataString)
+        }
+        // Write the value to the led indicating somewhat is happened
+        hwio.DigitalWrite(theOshi.actionLed, hwio.HIGH)
+        hwio.DigitalWrite(theOshi.actionLed, hwio.LOW)
+    }
+}
+
+// another version looking for more speed, based in local variables
+func (acq *Acquisition) readFromArduino2(){
+
+    var register, reg []byte
+    var sincroMicroSecondsInBytes []byte
+    var sensorMicroSecondsInBytes []byte
+    var distanceInBytes []byte
+    var accXInBytes []byte
+    var accYInBytes []byte
+    var accZInBytes []byte
+    var gyrXInBytes []byte
+    var gyrYInBytes []byte
+    var gyrZInBytes []byte
+    var sincroMicroSeconds uint32
+    var sensorMicroSeconds uint32
+    var distance uint32
+    var accX float32
+    var accY float32
+    var accZ float32
+    var gyrX float32
+    var gyrY float32
+    var gyrZ float32
+
+    // don't use the first readding ??  I'm not sure about that
+    reader := bufio.NewReader(acq.serialPort)
+    // find the begging of an stream of data from the sensors
+    register, err := reader.ReadBytes('\x24');
+    if err != nil { log.Fatal(err) }
+    //log.Println(register)
+    //log.Printf(">>>>>>>>>>>>>>")
+
+    // loop
+    for acq.getState() != stateSTOPPED {
+        // Read the serial and decode
+        
+        register = nil
+        reg = nil
+
+        //n, err = s.Read(register)
+        for len(register) < 38 { // in case of \x24 chars repeted maked the length will be less than the expected 38 bytes
+            reg, err = reader.ReadBytes('\x24');
+            if err != nil { log.Fatal(err) }
+            register = append(register, reg...)
+        }
+
+        receptionTime := time.Now() // time of the action detected
+
+        if (register[0] == '\x23') {
+
+            //decode the register
+
+             sincroMicroSecondsInBytes = register[1:5]
+             buf := bytes.NewReader(sincroMicroSecondsInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &sincroMicroSeconds)
+
+             sensorMicroSecondsInBytes = register[5:9]
+             buf = bytes.NewReader(sensorMicroSecondsInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &sensorMicroSeconds)
+
+             distanceInBytes = register[9:13]
+             buf = bytes.NewReader(distanceInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &distance)
+
+             accXInBytes = register[13:17]
+             buf = bytes.NewReader(accXInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &accX)
+
+             accYInBytes = register[17:21]
+             buf = bytes.NewReader(accYInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &accY)
+
+             accZInBytes = register[21:25]
+             buf = bytes.NewReader(accZInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &accZ)
+
+             gyrXInBytes = register[25:29]
+             buf = bytes.NewReader(gyrXInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &gyrX)
+
+             gyrYInBytes = register[29:33]
+             buf = bytes.NewReader(gyrYInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &gyrY)
+
+             gyrZInBytes = register[33:37]
+             buf = bytes.NewReader(gyrZInBytes)
+             err = binary.Read(buf, binary.LittleEndian, &gyrZ)
+
+        } // if
+
+
+
+  
+	if  acq.getState() != statePAUSED {
+	    //compound the dataline and write to the output
+            //receptionTime= time.Now() // Alternative: time at this point 
+            dataString := fmt.Sprintf("[%s], %v, %d, %d, %d, %f, %f, %f, %f, %f, %f\n",
+                       "Ard", receptionTime.Sub(theAcq.getTime0()),
+                       sincroMicroSeconds, sensorMicroSeconds, distance, 
+                       accX, accY, accZ, gyrX, gyrY, gyrZ)
+
+            log.Println(dataString)
+            acq.outputFile.WriteString(dataString)
         }
         // Write the value to the led indicating somewhat is happened
         hwio.DigitalWrite(theOshi.actionLed, hwio.HIGH)
@@ -537,7 +652,6 @@ func startHandler(w http.ResponseWriter, r *http.Request) {
     
     go theAcq.readFromArduino()
     log.Println("Started Arduino")
-
     go readTracker("A", theOshi.trackerA)
     log.Println("Started Tracker A")
     go readTracker("B", theOshi.trackerB)
